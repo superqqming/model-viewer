@@ -264,7 +264,8 @@ import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 const $ = id => document.getElementById(id);
 const fmt = v => String(Math.round(v * 10) / 10);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const nextFrame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+// 讓「處理中」先顯示出來再做重活。不能用 requestAnimationFrame：分頁在背景、或嵌入框不在畫面內時瀏覽器會暫停它，模型就永遠載不出來
+const nextFrame = () => new Promise(r => setTimeout(r, 30));
 
 // ====================================================================
 // 視角：dir = 從模型中心指向相機。模型的「前」朝 +Z、「上」朝 +Y（與三視圖產生器相同）
