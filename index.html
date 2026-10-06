@@ -1,0 +1,1452 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>3D 模型檢視器</title>
+<meta name="description" content="用滑鼠旋轉、縮放 3D 模型（OBJ / STL / GLB），作為繪製三視圖的依據；可切換平行投影、顯示隱藏線與量測尺寸。">
+<style>
+  :root {
+    --bg: #eef0f3; --panel: #ffffff; --ink: #1d2330; --muted: #6b7383; --line: #dde1e7;
+    --accent: #1f6feb; --accent-soft: #e7f0ff; --warn: #b54708; --warn-soft: #fff4e5;
+    --measure: #e8590c; --ok: #2f9e44;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+    color: var(--ink); background: var(--bg); font-size: 13px; overflow: hidden;
+  }
+  .app { display: grid; grid-template-columns: 1fr; height: 100%; }
+  body.teacher .app { grid-template-columns: 340px 1fr; }
+
+  /* ---------- 老師設定面板 ---------- */
+  aside { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; }
+  aside header { padding: 16px 18px 10px; border-bottom: 1px solid var(--line); }
+  aside h1 { font-size: 17px; margin: 0 0 2px; letter-spacing: .02em; }
+  aside header p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+  section.card { padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  section.card h2 { font-size: 12px; font-weight: 700; color: var(--muted); margin: 0 0 10px; letter-spacing: .08em; }
+  .drop {
+    display: block; line-height: 1.6; margin-top: 8px;
+    border: 1.5px dashed #b8c0cc; border-radius: 10px; padding: 12px 10px; text-align: center;
+    color: var(--muted); cursor: pointer; transition: .15s; background: #fafbfc;
+  }
+  .drop.over, .drop:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .drop strong { display: block; color: var(--ink); font-size: 13px; }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .row + .row, .row + .chk, .chk + .chk, .chk + .row, .note + .row { margin-top: 8px; }
+  .lbl { color: var(--muted); min-width: 64px; }
+  aside button, aside select, aside input[type=text], aside textarea {
+    font: inherit; color: inherit; border: 1px solid var(--line); background: #fff; border-radius: 7px;
+    padding: 5px 9px; min-height: 30px;
+  }
+  aside button { cursor: pointer; }
+  aside button:hover { border-color: #b9c2cf; background: #f6f8fa; }
+  aside button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  aside button.primary:hover { filter: brightness(1.07); }
+  aside select { flex: 1; min-width: 0; }
+  aside input[type=text] { flex: 1; min-width: 0; }
+  aside input[type=range] { flex: 1; }
+  aside textarea { width: 100%; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 12px; word-break: break-all; }
+  .chk { display: flex; gap: 7px; align-items: center; cursor: pointer; }
+  .note { margin: 0 0 8px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .info { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .warn { margin-top: 8px; font-size: 12px; color: var(--warn); background: var(--warn-soft); border-radius: 7px; padding: 6px 8px; line-height: 1.55; }
+  .steps { margin: 10px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); line-height: 1.7; }
+  .steps b { color: var(--ink); font-weight: 600; }
+  #tOpen { color: var(--accent); text-decoration: none; font-size: 12px; }
+  #tOpen:hover { text-decoration: underline; }
+
+  /* ---------- 3D 畫面 ---------- */
+  main#stage { position: relative; overflow: hidden; min-height: 0; min-width: 0; touch-action: none; user-select: none; -webkit-user-select: none; }
+  main#stage > canvas.gl { display: block; width: 100%; height: 100%; outline: none; }
+  body.measuring main#stage > canvas.gl { cursor: crosshair; }
+  #ov { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+  #labels { position: absolute; inset: 0; pointer-events: none; }
+  .ml {
+    position: absolute; transform: translate(-50%, -50%); white-space: nowrap; text-align: center;
+    background: #fff; border: 1.5px solid var(--measure); border-radius: 7px; padding: 2px 7px 3px;
+    font-size: 12px; line-height: 1.35; box-shadow: 0 1px 4px rgba(20, 30, 50, .15);
+  }
+  .ml b { font-size: 14px; }
+  .ml small { display: block; color: var(--muted); font-size: 11px; }
+  #cube { position: absolute; top: 8px; right: 8px; width: 92px; height: 92px; cursor: pointer; touch-action: none; }
+  #head { position: absolute; top: 10px; left: 12px; max-width: calc(100% - 124px); pointer-events: none; }
+  #title { font-weight: 700; font-size: 15px; text-shadow: 0 0 4px var(--bg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #dims { display: inline-block; margin-top: 4px; font-size: 12px; background: rgba(255, 255, 255, .85); border: 1px solid var(--line); border-radius: 7px; padding: 2px 8px; }
+  #hint { margin-top: 6px; font-size: 12px; color: var(--muted); transition: opacity .6s; text-shadow: 0 0 4px var(--bg); }
+  #hint.gone { opacity: 0; }
+  #mhint {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%); pointer-events: none;
+    background: var(--measure); color: #fff; border-radius: 999px; padding: 4px 12px; font-size: 12px; white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(20, 30, 50, .2);
+  }
+  #snap {
+    position: absolute; pointer-events: none; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+    border: 2px solid var(--ok); border-radius: 2px; background: rgba(255, 255, 255, .6);
+  }
+  #snap.edge { border-color: var(--accent); border-radius: 50%; }
+  #snap.face { border-color: var(--measure); border-radius: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; }
+  #snap span {
+    position: absolute; left: 14px; top: -18px; font-size: 11px; color: #fff; background: rgba(29, 35, 48, .8);
+    padding: 0 5px; border-radius: 4px; white-space: nowrap;
+  }
+  .toolbar {
+    position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; width: max-content; max-width: calc(100% - 16px);
+  }
+  .grp {
+    display: inline-flex; background: #fff; border: 1px solid var(--line); border-radius: 9px; overflow: hidden;
+    box-shadow: 0 1px 4px rgba(20, 30, 50, .1);
+  }
+  .grp button {
+    font: inherit; color: var(--ink); border: 0; border-right: 1px solid var(--line); background: transparent;
+    padding: 6px 10px; min-height: 32px; cursor: pointer; white-space: nowrap;
+  }
+  .grp button:last-child { border-right: 0; }
+  .grp button:hover { background: #f3f5f8; }
+  .grp button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  #bMeasure.on { background: #fff0e6; color: var(--measure); }
+  #loading {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
+    background: rgba(238, 240, 243, .85); font-size: 14px; color: var(--muted); padding: 20px; line-height: 1.7;
+  }
+  #loading.err { color: var(--warn); }
+  @media (max-width: 820px) {
+    body.teacher { overflow: auto; }
+    body.teacher .app { grid-template-columns: 1fr; height: auto; }
+    body.teacher aside { border-right: 0; }
+    body.teacher main#stage { height: 75vh; }
+  }
+  @media (max-width: 480px) {
+    .grp button { padding: 6px 8px; }
+    #cube { width: 76px; height: 76px; }
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div class="app">
+  <aside id="panel" hidden>
+    <header>
+      <h1>3D 模型檢視器 · 老師設定</h1>
+      <p>選模型、確認擺放方向，複製網址貼到 Google 協作平台。這一頁只有設定用，同學看到的是右邊的畫面。</p>
+    </header>
+
+    <section class="card">
+      <h2>1 · 選擇模型</h2>
+      <div class="row"><select id="tList"><option value="">（讀取清單中…）</option></select></div>
+      <label class="drop" id="tDrop">
+        <strong>或拖曳檔案到這裡先預覽</strong>
+        OBJ / STL / GLB，還沒發布的檔案也能看
+        <input type="file" id="tFile" accept=".obj,.stl,.glb" hidden>
+      </label>
+      <div class="info" id="tInfo"></div>
+      <div class="warn" id="tWarn" hidden></div>
+    </section>
+
+    <section class="card">
+      <h2>2 · 擺放方向</h2>
+      <p class="note">右上角方塊的「<b style="color:var(--measure)">前</b>」面，就是同學畫前視圖時看的方向。方向不對就轉到對為止。</p>
+      <div class="row">
+        <button data-rot="y">水平轉 90°</button>
+        <button data-rot="x">前後翻 90°</button>
+        <button data-rot="z">左右翻 90°</button>
+        <button id="tRotReset">重設</button>
+      </div>
+      <label class="chk"><input type="checkbox" id="tZup"> 來源檔是 Z 軸朝上（STL 常見）</label>
+      <div class="row">
+        <span class="lbl">檔案單位</span>
+        <select id="tUnit">
+          <option value="1">mm</option><option value="10">cm</option><option value="1000">m</option>
+          <option value="25.4">inch</option><option value="304.8">ft</option>
+        </select>
+      </div>
+      <div class="row">
+        <span class="lbl">稜線角度</span>
+        <input type="range" id="tAng" min="5" max="80" step="1" value="30">
+        <span id="tAngVal" style="width:34px;text-align:right">30°</span>
+      </div>
+      <div class="info">兩面夾角大於這個角度才畫成稜線。曲面上出現多餘的折線就調大；該有的稜線沒畫出來就調小。</div>
+    </section>
+
+    <section class="card">
+      <h2>3 · 同學看到的</h2>
+      <div class="row"><span class="lbl">標題</span><input type="text" id="tTitle" placeholder="不填就用檔名" maxlength="80"></div>
+      <div class="row">
+        <span class="lbl">起始視角</span>
+        <select id="tView">
+          <option value="iso">等角</option><option value="front">前視</option><option value="top">俯視</option>
+          <option value="right">右側視</option><option value="left">左側視</option><option value="back">後視</option><option value="bottom">仰視</option>
+        </select>
+      </div>
+      <div class="row">
+        <span class="lbl">起始投影</span>
+        <select id="tProj"><option value="o">平行投影（建議）</option><option value="p">透視</option></select>
+      </div>
+      <label class="chk" style="margin-top:10px"><input type="checkbox" id="tMeasure" checked> 量測工具</label>
+      <label class="chk"><input type="checkbox" id="tDims" checked> 外形總尺寸</label>
+      <label class="chk"><input type="checkbox" id="tHidden" checked> 「隱藏線」按鈕（考試時可以關掉）</label>
+    </section>
+
+    <section class="card">
+      <h2>4 · 嵌入網址</h2>
+      <textarea id="tUrl" rows="4" readonly></textarea>
+      <div class="row" style="margin-top:6px">
+        <button class="primary" id="tCopy">複製網址</button>
+        <a id="tOpen" href="#" target="_blank" rel="noopener">在新分頁看同學的畫面 ↗</a>
+      </div>
+      <div class="warn" id="tUrlWarn" hidden></div>
+      <ol class="steps">
+        <li>Google 協作平台右側選 <b>插入 → 嵌入</b></li>
+        <li>選 <b>依網址</b>，貼上網址；若出現選項，選 <b>整個網頁</b></li>
+        <li>按 <b>插入</b>，再拖曳邊框把高度拉到約 500px 以上</li>
+      </ol>
+    </section>
+  </aside>
+
+  <main id="stage">
+    <svg id="ov"></svg>
+    <div id="labels"></div>
+    <div id="head">
+      <div id="title"></div>
+      <div id="dims" hidden></div>
+      <div id="hint"></div>
+    </div>
+    <div id="mhint" hidden></div>
+    <div id="snap" hidden><span></span></div>
+    <canvas id="cube" title="點方塊的面切換視角"></canvas>
+    <div class="toolbar" id="toolbar">
+      <div class="grp" id="gViews">
+        <button data-view="front" title="前視圖（鍵盤 1）">前視</button>
+        <button data-view="top" title="俯視圖（鍵盤 2）">俯視</button>
+        <button data-view="right" title="右側視圖（鍵盤 3）">右側</button>
+        <button data-view="left" title="左側視圖（鍵盤 4）">左側</button>
+        <button data-view="back" title="後視圖（鍵盤 5）">後視</button>
+        <button data-view="bottom" title="仰視圖（鍵盤 6）">仰視</button>
+        <button data-view="iso" title="等角（鍵盤 0）">等角</button>
+      </div>
+      <div class="grp" id="gProj">
+        <button data-proj="o" title="平行投影：沒有近大遠小，和三視圖的看法相同">平行</button>
+        <button data-proj="p" title="透視：近大遠小，和眼睛看到的一樣">透視</button>
+      </div>
+      <div class="grp" id="gHidden"><button id="bHidden" title="把被擋住的邊用虛線顯示">隱藏線</button></div>
+      <div class="grp" id="gMeasure">
+        <button id="bMeasure" title="點兩個點量距離（會吸附到端點與邊）">量測</button>
+        <button id="bClear" title="清除所有量測" hidden>清除</button>
+      </div>
+      <div class="grp">
+        <button id="bReset" title="回到起始視角">重設</button>
+        <button id="bPop" hidden>↗</button>
+      </div>
+    </div>
+    <div id="loading">載入中…</div>
+  </main>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const $ = id => document.getElementById(id);
+const fmt = v => String(Math.round(v * 10) / 10);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const nextFrame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+
+// ====================================================================
+// 視角：dir = 從模型中心指向相機。模型的「前」朝 +Z、「上」朝 +Y（與三視圖產生器相同）
+// 俯視、仰視稍微偏向前方，讓畫面上方分別是「後」與「前」（第三角法的擺法）
+// ====================================================================
+const VIEWS = {
+  front:  { dir: [0, 0, 1],     name: '前視' },
+  top:    { dir: [0, 1, 1e-4],  name: '俯視' },
+  right:  { dir: [1, 0, 0],     name: '右側視' },
+  left:   { dir: [-1, 0, 0],    name: '左側視' },
+  back:   { dir: [0, 0, -1],    name: '後視' },
+  bottom: { dir: [0, -1, 1e-4], name: '仰視' },
+  iso:    { dir: [1, 1, 1],     name: '等角' },
+};
+const VIEW_KEYS = { 1: 'front', 2: 'top', 3: 'right', 4: 'left', 5: 'back', 6: 'bottom', 0: 'iso' };
+// BoxGeometry 的面順序：+X, -X, +Y, -Y, +Z, -Z
+const CUBE_FACES = [['right', '右'], ['left', '左'], ['top', '上'], ['bottom', '下'], ['front', '前'], ['back', '後']];
+
+// ====================================================================
+// 連結參數（老師在設定頁決定，同學只讀）
+//   m 模型檔（models/ 底下）  up=z|y 來源軸向  rot 90° 轉動序列  u 單位（mm 倍數）  a 稜線角度
+//   view 起始視角  proj=o|p  measure=0 / dims=0 / hidden=0 關閉功能  title 標題
+// ====================================================================
+const PARAMS = new URLSearchParams(location.search);
+function readOpts(p) {
+  const up = p.get('up'), u = +p.get('u'), a = +p.get('a');
+  return {
+    m: (p.get('m') || '').trim(),
+    up: up === 'z' ? true : up === 'y' ? false : null,
+    rot: (p.get('rot') || '').replace(/[^xyz]/g, '').slice(0, 12),
+    u: u > 0 ? u : null,
+    a: a >= 5 && a <= 80 ? Math.round(a) : 30,
+    view: VIEWS[p.get('view')] ? p.get('view') : 'iso',
+    proj: p.get('proj') === 'p' ? 'p' : 'o',
+    measure: p.get('measure') !== '0',
+    dims: p.get('dims') !== '0',
+    hidden: p.get('hidden') !== '0',
+    title: (p.get('title') || '').slice(0, 80),
+  };
+}
+const opts = readOpts(PARAMS);
+const TEACHER = PARAMS.has('teacher') || !opts.m;
+
+// 90° 轉動：序列中每個字母代表繞該軸轉 +90°（在世界座標中依序套用）
+const ROT_GEN = {
+  x: new THREE.Matrix4().makeRotationX(Math.PI / 2),
+  y: new THREE.Matrix4().makeRotationY(Math.PI / 2),
+  z: new THREE.Matrix4().makeRotationZ(Math.PI / 2),
+};
+function rotMatrix(seq) {
+  const m = new THREE.Matrix4();
+  for (const c of seq) m.premultiply(ROT_GEN[c]);
+  return m;
+}
+const rotKey = m => m.elements.map(v => Math.round(v)).join();
+// 24 種擺放各自最短的序列（讓網址保持簡短）
+const ROT_CANON = (() => {
+  const map = new Map([[rotKey(new THREE.Matrix4()), '']]), queue = [''];
+  while (queue.length) {
+    const s = queue.shift();
+    for (const c of 'yxz') {
+      const k = rotKey(rotMatrix(s + c));
+      if (!map.has(k)) { map.set(k, s + c); queue.push(s + c); }
+    }
+  }
+  return map;
+})();
+const canonRot = seq => ROT_CANON.get(rotKey(rotMatrix(seq))) ?? seq;
+
+// ====================================================================
+// 幾何管線：讀檔、頂點合併、T 形接點修補、稜線分類
+// 取自 Teaching_Tools/3 side view generator/index.html（SketchUp 匯出的凹多邊形、
+// 接縫不對齊、雙面匯出等問題都在那邊驗證過）；修改時請兩邊一起改。
+// ====================================================================
+function buildTopology(soup) {
+  const n0 = soup.length / 3;
+  let mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity], maxAbs = 0;
+  const finite = new Uint8Array(n0);
+  for (let i = 0; i < n0; i++) {
+    const x = soup[3 * i], y = soup[3 * i + 1], z = soup[3 * i + 2];
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;   // 損壞的座標直接略過
+    finite[i] = 1;
+    for (const [k, c] of [[0, x], [1, y], [2, z]]) { if (c < mn[k]) mn[k] = c; if (c > mx[k]) mx[k] = c; if (Math.abs(c) > maxAbs) maxAbs = Math.abs(c); }
+  }
+  const diag = Math.hypot(mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]) || 1;
+  // 頂點合併：容差 q 內視為同一點；同時檢查相鄰格，避免浮點誤差剛好落在格線兩側而沒合併。
+  // 遠離原點的模型（例如 SketchUp 只匯出選取物件）座標捨入誤差較大，容差也跟著座標大小放寬。
+  const q = Math.max(diag * 1e-5, maxAbs * 2e-7), K = 100003;
+  const tjTol = Math.max(diag * 2e-5, maxAbs * 1.2e-5);   // T 形接點容差（≥ 退化三角形門檻，被刪掉的尖點才能補回）
+  const cells = new Map(), P = [], remap = new Int32Array(n0).fill(-1);
+  const cellKey = (ix, iy, iz) => (ix * K + iy) * K + iz;
+  const findIn = (x, y, z, key) => {
+    const l = cells.get(key); if (!l) return -1;
+    for (const id of l) if (Math.abs(P[3 * id] - x) <= q && Math.abs(P[3 * id + 1] - y) <= q && Math.abs(P[3 * id + 2] - z) <= q) return id;
+    return -1;
+  };
+  for (let i = 0; i < n0; i++) {
+    if (!finite[i]) continue;
+    const x = soup[3 * i], y = soup[3 * i + 1], z = soup[3 * i + 2];
+    const ix = Math.floor((x - mn[0]) / q), iy = Math.floor((y - mn[1]) / q), iz = Math.floor((z - mn[2]) / q);
+    let id = findIn(x, y, z, cellKey(ix, iy, iz));
+    for (let d = 0; id < 0 && d < 27; d++) {
+      if (d === 13) continue;
+      id = findIn(x, y, z, cellKey(ix + (d % 3) - 1, iy + ((d / 3 | 0) % 3) - 1, iz + (d / 9 | 0) - 1));
+    }
+    if (id < 0) {
+      id = P.length / 3; P.push(x, y, z);
+      const k = cellKey(ix, iy, iz), l = cells.get(k);
+      if (l) l.push(id); else cells.set(k, [id]);
+    }
+    remap[i] = id;
+  }
+  const tl = [], seenTri = new Set();
+  const minH = diag * 2e-5;
+  let dupRemoved = 0;
+  for (let f = 0; f < n0 / 3; f++) {
+    const a = remap[3 * f], b = remap[3 * f + 1], c = remap[3 * f + 2];
+    if (a < 0 || b < 0 || c < 0 || a === b || b === c || a === c) continue;
+    const ux = P[3 * b] - P[3 * a], uy = P[3 * b + 1] - P[3 * a + 1], uz = P[3 * b + 2] - P[3 * a + 2];
+    const vx = P[3 * c] - P[3 * a], vy = P[3 * c + 1] - P[3 * a + 1], vz = P[3 * c + 2] - P[3 * a + 2];
+    const wx = P[3 * c] - P[3 * b], wy = P[3 * c + 1] - P[3 * b + 1], wz = P[3 * c + 2] - P[3 * b + 2];
+    const cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+    // 退化三角形：以「相對最長邊的高」判斷（與檔案單位無關）。被刪掉的尖點之後由 T 形接點修補補回
+    const Lmax2 = Math.max(ux * ux + uy * uy + uz * uz, vx * vx + vy * vy + vz * vz, wx * wx + wy * wy + wz * wz);
+    if (cx * cx + cy * cy + cz * cz < Lmax2 * minH * minH) continue;
+    // 完全重複的面（SketchUp「雙面匯出」、原地複製貼上）只保留一份
+    const key = [a, b, c].sort((p, r) => p - r).join();
+    if (seenTri.has(key)) { dupRemoved++; continue; }
+    seenTri.add(key);
+    tl.push(a, b, c);
+  }
+  const rep = repairTJunctions(P, tl, tjTol, diag);
+  const nv = P.length / 3;
+  const tris = Int32Array.from(rep.tris), nt = tris.length / 3;
+  const emap = new Map(), extra = new Map();   // extra：三個以上面共用的邊，第 3 個起的面
+  const ea = [], eb = [], f1 = [], f2 = [], s1 = [], s2 = [], cnt = [];
+  for (let f = 0; f < nt; f++) for (let k = 0; k < 3; k++) {
+    const p = tris[3 * f + k], r = tris[3 * f + (k + 1) % 3];
+    const a = Math.min(p, r), b = Math.max(p, r), dir = p < r ? 1 : -1;
+    const key = a * nv + b;
+    let e = emap.get(key);
+    if (e === undefined) {
+      e = ea.length; emap.set(key, e);
+      ea.push(a); eb.push(b); f1.push(f); s1.push(dir); f2.push(-1); s2.push(0); cnt.push(1);
+    } else {
+      if (cnt[e] === 1) { f2[e] = f; s2[e] = dir; }
+      else { const l = extra.get(e); if (l) l.push(f); else extra.set(e, [f]); }
+      cnt[e]++;
+    }
+  }
+  return {
+    P: Float64Array.from(P), nv, tris, nt, tjFixed: rep.fixed, dupRemoved, extra,
+    E: { a: Int32Array.from(ea), b: Int32Array.from(eb), f1: Int32Array.from(f1), f2: Int32Array.from(f2),
+         s1: Int8Array.from(s1), s2: Int8Array.from(s2), n: Int32Array.from(cnt) },
+  };
+}
+
+// T 形接點修補：SketchUp、Rhino 等常讓一側是長邊、另一側是兩段短邊，
+// 實體其實封閉，但邊對不上。把落在開放邊上的頂點插入該邊並重新切三角形。
+function repairTJunctions(P, tris, tol, diag) {
+  const cs = diag / 64;
+  let fixed = 0;
+  for (let pass = 0; pass < 4; pass++) {
+    const nv = P.length / 3, nt = tris.length / 3;
+    const use = new Map();
+    for (let f = 0; f < nt; f++) for (let k = 0; k < 3; k++) {
+      const p = tris[3 * f + k], r = tris[3 * f + (k + 1) % 3];
+      const key = Math.min(p, r) * nv + Math.max(p, r);
+      const u = use.get(key);
+      if (u) u[0]++; else use.set(key, [1, f, k]);
+    }
+    const open = [];
+    const grid = new Map();
+    const gkey = (x, y, z) => Math.floor(x / cs) + ',' + Math.floor(y / cs) + ',' + Math.floor(z / cs);
+    const seenV = new Set();
+    for (const u of use.values()) {
+      if (u[0] !== 1) continue;
+      open.push(u);
+      for (const v of [tris[3 * u[1] + u[2]], tris[3 * u[1] + (u[2] + 1) % 3]]) {
+        if (seenV.has(v)) continue; seenV.add(v);
+        const k = gkey(P[3 * v], P[3 * v + 1], P[3 * v + 2]);
+        const l = grid.get(k); if (l) l.push(v); else grid.set(k, [v]);
+      }
+    }
+    if (!open.length) break;
+    const splits = new Map();
+    for (const [, f, k] of open) {
+      const a = tris[3 * f + k], b = tris[3 * f + (k + 1) % 3], o = tris[3 * f + (k + 2) % 3];
+      const ax = P[3 * a], ay = P[3 * a + 1], az = P[3 * a + 2];
+      const dx = P[3 * b] - ax, dy = P[3 * b + 1] - ay, dz = P[3 * b + 2] - az;
+      const L2 = dx * dx + dy * dy + dz * dz, L = Math.sqrt(L2);
+      if (L < tol * 3) continue;
+      // 沿邊取樣，收集邊附近的格子
+      const keys = new Set(), steps = Math.ceil(L / (cs * 0.5));
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps, x = ax + dx * t, y = ay + dy * t, z = az + dz * t;
+        for (let d = 0; d < 27; d++) keys.add(gkey(x + ((d % 3) - 1) * cs, y + (((d / 3 | 0) % 3) - 1) * cs, z + ((d / 9 | 0) - 1) * cs));
+      }
+      const found = [];
+      for (const key of keys) {
+        const l = grid.get(key); if (!l) continue;
+        for (const v of l) {
+          if (v === a || v === b || v === o) continue;
+          const wx = P[3 * v] - ax, wy = P[3 * v + 1] - ay, wz = P[3 * v + 2] - az;
+          const t = (wx * dx + wy * dy + wz * dz) / L2;
+          if (t * L <= tol || (1 - t) * L <= tol) continue;
+          const ex = wx - t * dx, ey = wy - t * dy, ez = wz - t * dz;
+          if (ex * ex + ey * ey + ez * ez <= tol * tol) found.push({ t, v });
+        }
+      }
+      if (!found.length) continue;
+      found.sort((p, q) => p.t - q.t);
+      let s = splits.get(f); if (!s) splits.set(f, s = [null, null, null]);
+      s[k] = found.map(x => x.v);
+    }
+    if (!splits.size) break;
+    const out = [];
+    for (let f = 0; f < nt; f++) {
+      const s = splits.get(f), c = [tris[3 * f], tris[3 * f + 1], tris[3 * f + 2]];
+      if (!s) { out.push(c[0], c[1], c[2]); continue; }
+      const edges = [0, 1, 2].filter(k => s[k]);
+      edges.forEach(k => { fixed += s[k].length; });
+      if (edges.length === 1) {
+        // 只有一條邊要插點：由對角頂點做扇形
+        const k = edges[0], chain = [c[k], ...s[k], c[(k + 1) % 3]], o = c[(k + 2) % 3];
+        for (let i = 0; i + 1 < chain.length; i++) out.push(chain[i], chain[i + 1], o);
+      } else {
+        // 多條邊要插點：加入重心點做扇形（三角形加邊上點仍是凸多邊形）
+        const poly = [];
+        for (let k = 0; k < 3; k++) { poly.push(c[k]); if (s[k]) poly.push(...s[k]); }
+        const cid = P.length / 3;
+        P.push((P[3 * c[0]] + P[3 * c[1]] + P[3 * c[2]]) / 3, (P[3 * c[0] + 1] + P[3 * c[1] + 1] + P[3 * c[2] + 1]) / 3, (P[3 * c[0] + 2] + P[3 * c[1] + 2] + P[3 * c[2] + 2]) / 3);
+        for (let i = 0; i < poly.length; i++) out.push(poly[i], poly[(i + 1) % poly.length], cid);
+      }
+    }
+    tris = out;
+  }
+  return { tris, fixed };
+}
+
+function classifyModel(M, thrDeg) {
+  const E = M.E, ne = E.n.length, FN = M.FN, V = M.V;
+  const c = Math.cos(thrDeg * Math.PI / 180);
+  const sharp = new Uint8Array(ne), edgeCos = new Float32Array(ne).fill(-1);   // edgeCos：兩面法向量夾角的餘弦（找圓用）
+  let flipped = 0, nonManifold = 0;
+  for (let e = 0; e < ne; e++) {
+    if (E.n[e] === 1) { sharp[e] = 1; continue; }
+    if (E.n[e] > 2) {
+      // 三個以上面共用：若全部共平面（重疊的面、相貼的零件），不是稜線；否則（如等徑十字孔交線）是稜線
+      nonManifold++;
+      const fs = [E.f1[e], E.f2[e], ...(M.extra.get(e) || [])];
+      const cop = Math.cos(Math.PI / 180);
+      let allCoplanar = true;
+      for (let i = 0; i < fs.length && allCoplanar; i++) for (let j = i + 1; j < fs.length; j++) {
+        const p = fs[i], r = fs[j];
+        if (Math.abs(FN[3 * p] * FN[3 * r] + FN[3 * p + 1] * FN[3 * r + 1] + FN[3 * p + 2] * FN[3 * r + 2]) < cop) { allCoplanar = false; break; }
+      }
+      sharp[e] = allCoplanar ? 0 : 1;
+      continue;
+    }
+    const fa = E.f1[e], fb = E.f2[e];
+    let d = FN[3 * fa] * FN[3 * fb] + FN[3 * fa + 1] * FN[3 * fb + 1] + FN[3 * fa + 2] * FN[3 * fb + 2];
+    if (E.s1[e] === E.s2[e]) { d = -d; flipped++; }   // 法向量方向不一致時自動修正
+    edgeCos[e] = d;
+    sharp[e] = d < c ? 1 : 0;
+  }
+  // T 形接點：兩條開放邊重疊且所屬面共平面 → 不是真正的稜線
+  const tol = M.diag * 1e-4, groups = new Map();
+  for (let e = 0; e < ne; e++) {
+    if (E.n[e] !== 1) continue;
+    const a = E.a[e], b = E.b[e];
+    let dx = V[3 * b] - V[3 * a], dy = V[3 * b + 1] - V[3 * a + 1], dz = V[3 * b + 2] - V[3 * a + 2];
+    const L = Math.hypot(dx, dy, dz); if (L < tol) continue;
+    dx /= L; dy /= L; dz /= L;
+    if (dx < -1e-9 || (Math.abs(dx) <= 1e-9 && (dy < -1e-9 || (Math.abs(dy) <= 1e-9 && dz < 0)))) { dx = -dx; dy = -dy; dz = -dz; }
+    const pa = [V[3 * a], V[3 * a + 1], V[3 * a + 2]], pb = [V[3 * b], V[3 * b + 1], V[3 * b + 2]];
+    const ta = pa[0] * dx + pa[1] * dy + pa[2] * dz, tb = pb[0] * dx + pb[1] * dy + pb[2] * dz;
+    const qx = pa[0] - ta * dx, qy = pa[1] - ta * dy, qz = pa[2] - ta * dz;
+    const key = [Math.round(dx * 500), Math.round(dy * 500), Math.round(dz * 500),
+                 Math.round(qx / tol), Math.round(qy / tol), Math.round(qz / tol)].join();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ e, t0: Math.min(ta, tb), t1: Math.max(ta, tb) });
+  }
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+      const A = list[i], B = list[j];
+      if (Math.min(A.t1, B.t1) - Math.max(A.t0, B.t0) <= tol) continue;
+      const fa = E.f1[A.e], fb = E.f1[B.e];
+      const d = Math.abs(FN[3 * fa] * FN[3 * fb] + FN[3 * fa + 1] * FN[3 * fb + 1] + FN[3 * fa + 2] * FN[3 * fb + 2]);
+      if (d > c) { sharp[A.e] = 0; sharp[B.e] = 0; }
+    }
+  }
+  let open = 0;
+  for (let e = 0; e < ne; e++) if (E.n[e] === 1 && sharp[e]) open++;
+  M.sharp = sharp; M.edgeCos = edgeCos;
+  M.stats = { flipped, nonManifold, open };
+}
+
+function objectToSoup(obj) {
+  // 逐點讀取（會處理量化／正規化的座標與 GPU Instancing），以 Float64 保留遠離原點模型的精度
+  obj.updateMatrixWorld(true);
+  const out = [], p = new THREE.Vector3();
+  obj.traverse(ch => {
+    const pos = ch.isMesh && ch.geometry?.attributes?.position;
+    if (!pos) return;
+    const idx = ch.geometry.index, n = idx ? idx.count : pos.count;
+    const mats = [];
+    if (ch.isInstancedMesh) {
+      for (let i = 0; i < ch.count; i++) { const im = new THREE.Matrix4(); ch.getMatrixAt(i, im); mats.push(new THREE.Matrix4().multiplyMatrices(ch.matrixWorld, im)); }
+    } else mats.push(ch.matrixWorld);
+    for (const mw of mats) for (let i = 0; i < n - n % 3; i++) {
+      p.fromBufferAttribute(pos, idx ? idx.getX(i) : i).applyMatrix4(mw);
+      out.push(p.x, p.y, p.z);
+    }
+  });
+  return Float64Array.from(out);
+}
+function geomToSoup(g) { return objectToSoup(new THREE.Mesh(g)); }
+
+// OBJ：自行解析。three.js 的 OBJLoader 以扇形切多邊形，遇到 SketchUp 等匯出的凹多邊形會切錯。
+const UNIT_WORDS = [
+  [/^(millimet(er|re)s?|mm)$/, 1], [/^(centimet(er|re)s?|cm)$/, 10], [/^(kilomet(er|re)s?|km)$/, 1e6],
+  [/^(met(er|re)s?|m)$/, 1000], [/^(inch(es)?|in)$/, 25.4], [/^(feet|foot|ft)$/, 304.8], [/^(yards?|yd)$/, 914.4], [/^miles?$/, 1609344],
+];
+// 從註解判讀單位：「# File units = millimeters」（SketchUp）、「# This file uses centimeters as units」（Maya）
+function unitFromComment(line) {
+  const m = line.match(/units?\s*[=:]\s*([a-z]+)/i) || line.match(/uses\s+([a-z]+)\s+as\s+units?/i);
+  if (!m) return null;
+  const w = m[1].toLowerCase();
+  for (const [re, v] of UNIT_WORDS) if (re.test(w)) return v;
+  return null;
+}
+function parseOBJ(text) {
+  const V = [], out = [];
+  let unit = null;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line[0] === '#') {
+      if (unit === null) unit = unitFromComment(line);
+      continue;
+    }
+    const p = line.split(/\s+/);
+    if (p[0] === 'v') V.push(+p[1], +p[2], +p[3]);
+    else if (p[0] === 'f') {
+      const n = V.length / 3, idx = [];
+      for (let i = 1; i < p.length; i++) {
+        const k = parseInt(p[i], 10);
+        if (!Number.isNaN(k)) idx.push(k < 0 ? n + k : k - 1);
+      }
+      triangulatePolygon(V, idx, out);
+    }
+  }
+  return { soup: Float64Array.from(out), unit };
+}
+
+// 多邊形三角化：投影到最接近的座標平面後以 earcut 切割（可處理凹多邊形），並維持原本的面方向
+function triangulatePolygon(V, idx, out) {
+  const id = idx.filter((v, i) => v !== idx[(i + 1) % idx.length]);
+  const n = id.length;
+  if (n < 3) return;
+  const pt = i => [V[3 * i], V[3 * i + 1], V[3 * i + 2]];
+  const push = (a, b, c) => { for (const i of [a, b, c]) out.push(V[3 * i], V[3 * i + 1], V[3 * i + 2]); };
+  if (n === 3) { push(id[0], id[1], id[2]); return; }
+  let nx = 0, ny = 0, nz = 0;
+  for (let i = 0; i < n; i++) {
+    const p = pt(id[i]), q = pt(id[(i + 1) % n]);
+    nx += (p[1] - q[1]) * (p[2] + q[2]); ny += (p[2] - q[2]) * (p[0] + q[0]); nz += (p[0] - q[0]) * (p[1] + q[1]);
+  }
+  const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+  const proj = az >= ax && az >= ay ? p => new THREE.Vector2(p[0], p[1])
+             : ax >= ay ? p => new THREE.Vector2(p[1], p[2]) : p => new THREE.Vector2(p[2], p[0]);
+  let faces = [];
+  try { faces = THREE.ShapeUtils.triangulateShape(id.map(i => proj(pt(i))), []); } catch { faces = []; }
+  if (!faces.length) { for (let i = 1; i < n - 1; i++) push(id[0], id[i], id[i + 1]); return; }
+  for (const [a, b, c] of faces) {
+    const A = pt(id[a]), B = pt(id[b]), C = pt(id[c]);
+    const ux = B[0] - A[0], uy = B[1] - A[1], uz = B[2] - A[2], vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
+    const dot = (uy * vz - uz * vy) * nx + (uz * vx - ux * vz) * ny + (ux * vy - uy * vx) * nz;
+    if (dot < 0) push(id[a], id[c], id[b]); else push(id[a], id[b], id[c]);
+  }
+}
+
+async function parseModel(name, buf) {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  if (ext === 'stl') {
+    return { soup: geomToSoup(new STLLoader().parse(buf)), zUp: true, unit: 1, unitNote: 'STL 沒有記錄單位，預設 mm' };
+  }
+  if (ext === 'obj') {
+    const { soup, unit } = parseOBJ(new TextDecoder().decode(buf));
+    return { soup, zUp: false, unit: unit ?? 1, unitNote: unit ? '依 OBJ 檔頭判定' : 'OBJ 沒有記錄單位，預設 mm' };
+  }
+  if (ext === 'glb') {
+    const gltf = await new Promise((res, rej) => new GLTFLoader().parse(buf, '', res, rej));
+    return { soup: objectToSoup(gltf.scene), zUp: false, unit: 1000, unitNote: 'glTF 規範單位為公尺' };
+  }
+  if (ext === 'gltf') throw new Error('.gltf 通常還需要另外的 .bin 檔，請改匯出成單一檔案的 .glb');
+  throw new Error(`不支援 .${ext} 檔，請用 OBJ、STL 或 GLB`);
+}
+
+// 套用方向與單位，置中，並整理出畫面需要的資料
+function makeModel(T, cfg) {
+  const m = new THREE.Matrix4();
+  if (cfg.zUp) m.makeRotationX(-Math.PI / 2);
+  m.premultiply(rotMatrix(cfg.rot));
+  const e = m.elements.map(v => Math.abs(v - Math.round(v)) < 1e-9 ? Math.round(v) : v);
+  const s = cfg.unit, nv = T.nv, P = T.P, V = new Float64Array(nv * 3);
+  const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < nv; i++) {
+    const x = P[3 * i], y = P[3 * i + 1], z = P[3 * i + 2];
+    const c = [(e[0] * x + e[4] * y + e[8] * z) * s, (e[1] * x + e[5] * y + e[9] * z) * s, (e[2] * x + e[6] * y + e[10] * z) * s];
+    for (let k = 0; k < 3; k++) { V[3 * i + k] = c[k]; if (c[k] < mn[k]) mn[k] = c[k]; if (c[k] > mx[k]) mx[k] = c[k]; }
+  }
+  const ctr = [0, 1, 2].map(k => (mn[k] + mx[k]) / 2);
+  for (let i = 0; i < nv; i++) for (let k = 0; k < 3; k++) V[3 * i + k] -= ctr[k];
+  const size = [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]];
+  const diag = Math.hypot(...size) || 1;
+  const nt = T.nt, tris = T.tris, FN = new Float64Array(nt * 3), FC = new Float64Array(nt * 3);
+  for (let f = 0; f < nt; f++) {
+    const a = tris[3 * f], b = tris[3 * f + 1], c = tris[3 * f + 2];
+    const ux = V[3 * b] - V[3 * a], uy = V[3 * b + 1] - V[3 * a + 1], uz = V[3 * b + 2] - V[3 * a + 2];
+    const vx = V[3 * c] - V[3 * a], vy = V[3 * c + 1] - V[3 * a + 1], vz = V[3 * c + 2] - V[3 * a + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const l = Math.hypot(nx, ny, nz) || 1;
+    FN[3 * f] = nx / l; FN[3 * f + 1] = ny / l; FN[3 * f + 2] = nz / l;
+    for (let k = 0; k < 3; k++) FC[3 * f + k] = (V[3 * a + k] + V[3 * b + k] + V[3 * c + k]) / 3;
+  }
+  const M = { ...T, V, FN, FC, size, diag, thr: cfg.thr };
+  classifyModel(M, cfg.thr);
+
+  // 稜線（固定）與平滑邊（輪廓線候選，隨視角計算）
+  const E = M.E, ne = E.n.length, sharpSeg = [], isCorner = new Uint8Array(nv);
+  const sm = [];
+  for (let k = 0; k < ne; k++) {
+    const a = E.a[k], b = E.b[k];
+    if (M.sharp[k]) {
+      sharpSeg.push(V[3 * a], V[3 * a + 1], V[3 * a + 2], V[3 * b], V[3 * b + 1], V[3 * b + 2]);
+      isCorner[a] = isCorner[b] = 1;
+    } else if (E.n[k] === 2) sm.push(k);
+  }
+  M.sharpSeg = Float32Array.from(sharpSeg);
+  M.corners = Int32Array.from(isCorner.reduce((l, v, i) => { if (v) l.push(i); return l; }, []));
+  M.smooth = Int32Array.from(sm);
+  M.silBuf = new Float32Array(Math.max(6, sm.length * 6));
+  return M;
+}
+
+// ====================================================================
+// 3D 畫面
+// ====================================================================
+const stage = $('stage');
+const S = { showHidden: false, measure: false };
+let src = null;        // { name, topo, fmtZup, fmtUnit, unitNote, local }
+let M = null;          // 套用方向後的模型
+let W = 1, H = 1, halfH = 1, orthoDist = 10, dirty = true, anim = null;
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (err) {
+  fail('這個瀏覽器無法顯示 3D（WebGL 未啟用）。請換一個瀏覽器，或用電腦開啟。');
+  throw err;
+}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.domElement.className = 'gl';
+renderer.domElement.tabIndex = 0;
+stage.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xeef0f3);
+const persp = new THREE.PerspectiveCamera(30, 1, 1, 1000);
+const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 1, 1000);
+scene.add(persp, ortho);
+scene.add(new THREE.HemisphereLight(0xffffff, 0xa9b2bf, 1.7));
+// 跟著相機的燈：不論轉到哪個角度，光線都從觀看者的右上方來
+const headlight = new THREE.DirectionalLight(0xffffff, 1.5);
+headlight.position.set(0.6, 0.9, 1);
+headlight.target.position.set(0, 0, -1);
+let cam = opts.proj === 'p' ? persp : ortho;
+cam.add(headlight, headlight.target);
+
+const controls = new OrbitControls(cam, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.15;
+controls.zoomToCursor = true;
+controls.addEventListener('change', () => { dirty = true; });
+controls.addEventListener('start', () => { anim = null; hideHint(); });
+
+const meshMat = new THREE.MeshStandardMaterial({
+  color: 0xf4f6f8, roughness: 0.92, metalness: 0, side: THREE.DoubleSide,
+  polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+});
+const visMat = new LineMaterial({ color: 0x1d2330, linewidth: 1.6 });
+// 隱藏線：只畫在模型後面的部分（深度大於模型表面），以虛線表示
+const hidMat = new LineMaterial({ color: 0x6b7383, linewidth: 1.2, dashed: true, dashSize: 1, gapSize: 1 });
+hidMat.depthFunc = THREE.GreaterDepth;
+hidMat.depthWrite = false;
+
+const root = new THREE.Group();
+scene.add(root);
+const R = { mesh: null, sharpGeo: null, silGeo: null, visSharp: null, hidSharp: null, visSil: null, hidSil: null };
+
+function disposeScene() {
+  root.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+  root.clear();
+  for (const k of Object.keys(R)) R[k] = null;
+}
+
+function buildScene() {
+  disposeScene();
+  const nt = M.nt, T = M.tris, V = M.V, pos = new Float32Array(nt * 9);
+  for (let f = 0; f < nt; f++) for (let k = 0; k < 3; k++) {
+    const v = T[3 * f + k];
+    pos[9 * f + 3 * k] = V[3 * v]; pos[9 * f + 3 * k + 1] = V[3 * v + 1]; pos[9 * f + 3 * k + 2] = V[3 * v + 2];
+  }
+  let g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g = toCreasedNormals(g, M.thr * Math.PI / 180);
+  R.mesh = new THREE.Mesh(g, meshMat);
+  root.add(R.mesh);
+  if (M.sharpSeg.length) {
+    R.sharpGeo = new LineSegmentsGeometry().setPositions(M.sharpSeg);
+    R.visSharp = new LineSegments2(R.sharpGeo, visMat);
+    R.hidSharp = new LineSegments2(R.sharpGeo, hidMat);
+    R.visSharp.computeLineDistances();
+    R.hidSharp.renderOrder = 1; R.visSharp.renderOrder = 2;
+    root.add(R.hidSharp, R.visSharp);
+  }
+  R.visSil = new LineSegments2(new LineSegmentsGeometry(), visMat);
+  R.hidSil = new LineSegments2(R.visSil.geometry, hidMat);
+  R.hidSil.renderOrder = 1; R.visSil.renderOrder = 2;
+  R.visSil.visible = R.hidSil.visible = false;
+  root.add(R.hidSil, R.visSil);
+  applyHidden();
+}
+
+// 曲面的輪廓線：平滑邊兩側的面一個朝向相機、一個背向，就是輪廓（隨視角改變）
+const _fwd = new THREE.Vector3();
+function updateSilhouettes() {
+  if (!M || !R.visSil) return;
+  const sm = M.smooth, n = sm.length;
+  if (!n) return;
+  cam.updateMatrixWorld();
+  const E = M.E, FN = M.FN, FC = M.FC, V = M.V, out = M.silBuf;
+  const isO = cam.isOrthographicCamera;
+  cam.getWorldDirection(_fwd);
+  const fx = _fwd.x, fy = _fwd.y, fz = _fwd.z, cx = cam.position.x, cy = cam.position.y, cz = cam.position.z;
+  let c = 0;
+  for (let i = 0; i < n; i++) {
+    const e = sm[i], f1 = E.f1[e], f2 = E.f2[e];
+    let s1, s2;
+    if (isO) {
+      s1 = FN[3 * f1] * fx + FN[3 * f1 + 1] * fy + FN[3 * f1 + 2] * fz;
+      s2 = FN[3 * f2] * fx + FN[3 * f2 + 1] * fy + FN[3 * f2 + 2] * fz;
+    } else {
+      s1 = FN[3 * f1] * (FC[3 * f1] - cx) + FN[3 * f1 + 1] * (FC[3 * f1 + 1] - cy) + FN[3 * f1 + 2] * (FC[3 * f1 + 2] - cz);
+      s2 = FN[3 * f2] * (FC[3 * f2] - cx) + FN[3 * f2 + 1] * (FC[3 * f2 + 1] - cy) + FN[3 * f2 + 2] * (FC[3 * f2 + 2] - cz);
+    }
+    if (E.s1[e] === E.s2[e]) s2 = -s2;   // 兩面方向不一致時，翻成一致再比較
+    if ((s1 < 0) === (s2 < 0)) continue;
+    const a = E.a[e], b = E.b[e];
+    out[c++] = V[3 * a]; out[c++] = V[3 * a + 1]; out[c++] = V[3 * a + 2];
+    out[c++] = V[3 * b]; out[c++] = V[3 * b + 1]; out[c++] = V[3 * b + 2];
+  }
+  // 每次換一個新的幾何物件並釋放舊的（直接改屬性會在 GPU 留下舊緩衝區）
+  const old = R.visSil.geometry;
+  if (c) {
+    const g = new LineSegmentsGeometry().setPositions(out.subarray(0, c));
+    R.visSil.geometry = R.hidSil.geometry = g;
+    R.visSil.computeLineDistances();
+  }
+  R.visSil.visible = c > 0;
+  R.hidSil.visible = c > 0 && S.showHidden;
+  if (c) old.dispose();
+}
+
+function updateDash() {
+  const wpp = cam.isOrthographicCamera
+    ? 2 * halfH / cam.zoom / H
+    : 2 * cam.position.distanceTo(controls.target) * Math.tan(THREE.MathUtils.degToRad(persp.fov / 2)) / H;
+  hidMat.dashSize = 6 * wpp;
+  hidMat.gapSize = 4 * wpp;
+}
+
+function setupCamera() {
+  halfH = M.diag * 0.6;
+  orthoDist = M.diag * 4;
+  ortho.near = M.diag * 0.01; ortho.far = M.diag * 10;
+  persp.near = M.diag * 0.005; persp.far = M.diag * 60;
+  controls.minDistance = M.diag * 0.05; controls.maxDistance = M.diag * 20;
+  controls.minZoom = 0.05; controls.maxZoom = 80;
+  resize();
+}
+
+function resize() {
+  W = Math.max(1, stage.clientWidth); H = Math.max(1, stage.clientHeight);
+  renderer.setSize(W, H, false);
+  const a = W / H;
+  persp.aspect = a; persp.updateProjectionMatrix();
+  ortho.left = -halfH * a; ortho.right = halfH * a; ortho.top = halfH; ortho.bottom = -halfH;
+  ortho.updateProjectionMatrix();
+  visMat.resolution.set(W, H); hidMat.resolution.set(W, H);
+  dirty = true;
+}
+new ResizeObserver(resize).observe(stage);
+
+// 某個方向看過去，要多遠（透視）或放多大（平行）才剛好放得下整個模型
+function frameFor(dir) {
+  const m = new THREE.Matrix4().lookAt(dir, new THREE.Vector3(), new THREE.Vector3(0, 1, 0)).elements;
+  const hs = M.size.map(s => s / 2);
+  let ex = 0, ey = 0, ez = 0;
+  for (let i = 0; i < 8; i++) {
+    const p = [(i & 1 ? 1 : -1) * hs[0], (i & 2 ? 1 : -1) * hs[1], (i & 4 ? 1 : -1) * hs[2]];
+    ex = Math.max(ex, Math.abs(p[0] * m[0] + p[1] * m[1] + p[2] * m[2]));
+    ey = Math.max(ey, Math.abs(p[0] * m[4] + p[1] * m[5] + p[2] * m[6]));
+    ez = Math.max(ez, Math.abs(p[0] * m[8] + p[1] * m[9] + p[2] * m[10]));
+  }
+  ex = Math.max(ex, M.diag * 0.02); ey = Math.max(ey, M.diag * 0.02);
+  // 上方標題、下方工具列會蓋住畫面；模型置中，所以上下都留出較大的那一邊
+  const pad = Math.max($('head').offsetHeight + 16, $('toolbar').offsetHeight + 20);
+  const fh = Math.max(0.35, (H - 2 * pad) / H);
+  const k = 1.12, a = W / H, t = Math.tan(THREE.MathUtils.degToRad(persp.fov / 2));
+  return {
+    zoom: Math.min(halfH * a / (ex * k), halfH * fh / (ey * k)),
+    dist: Math.max(ey * k / (t * fh), ex * k / (t * a)) + ez,
+  };
+}
+
+function viewDir(name) { return new THREE.Vector3(...VIEWS[name].dir).normalize(); }
+function currentDir() { return cam.position.clone().sub(controls.target).normalize(); }
+
+// 平滑轉到指定視角並自動縮放到剛好放得下
+function goView(name, animate = true) { flyTo(viewDir(name), animate); }
+function flyTo(dir, animate = true) {
+  if (!M) return;
+  const f = frameFor(dir);
+  const from = { dir: currentDir(), target: controls.target.clone(), dist: cam.position.distanceTo(controls.target), zoom: cam.zoom };
+  const to = { dir, target: new THREE.Vector3(), dist: cam.isPerspectiveCamera ? f.dist : orthoDist, zoom: cam.isOrthographicCamera ? f.zoom : 1 };
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  anim = { t0: performance.now(), dur: animate && !reduce ? 450 : 0, from, to, q: new THREE.Quaternion().setFromUnitVectors(from.dir, dir) };
+  stepAnim(performance.now());
+}
+const _q = new THREE.Quaternion(), _qI = new THREE.Quaternion();
+function stepAnim(now) {
+  const a = anim;
+  const t = a.dur ? Math.min(1, (now - a.t0) / a.dur) : 1;
+  const k = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  const d = t >= 1 ? a.to.dir.clone() : a.from.dir.clone().applyQuaternion(_q.slerpQuaternions(_qI, a.q, k));
+  const target = a.from.target.clone().lerp(a.to.target, k);
+  const dist = a.from.dist + (a.to.dist - a.from.dist) * k;
+  controls.target.copy(target);
+  cam.position.copy(target).addScaledVector(d, dist);
+  if (cam.isOrthographicCamera) { cam.zoom = a.from.zoom * Math.pow(a.to.zoom / a.from.zoom, k); cam.updateProjectionMatrix(); }
+  cam.lookAt(target);
+  if (t >= 1) { anim = null; controls.update(); }
+  dirty = true;
+}
+
+// 平行投影 ↔ 透視：保持同一個方向與差不多的畫面大小
+function setProj(p) {
+  if ((p === 'o') === !!cam.isOrthographicCamera) { markProj(); return; }
+  anim = null;
+  const dir = currentDir(), tgt = controls.target, tanH = Math.tan(THREE.MathUtils.degToRad(persp.fov / 2));
+  let next;
+  if (p === 'o') {
+    const d = persp.position.distanceTo(tgt);
+    ortho.zoom = halfH / (d * tanH);
+    ortho.position.copy(tgt).addScaledVector(dir, orthoDist);
+    next = ortho;
+  } else {
+    const d = halfH / ortho.zoom / tanH;
+    persp.position.copy(tgt).addScaledVector(dir, d);
+    next = persp;
+  }
+  next.add(headlight, headlight.target);
+  next.updateProjectionMatrix();
+  next.lookAt(tgt);
+  cam = next;
+  controls.object = next;
+  controls.update();
+  markProj();
+  dirty = true;
+}
+function markProj() {
+  document.querySelectorAll('[data-proj]').forEach(b => b.classList.toggle('on', (b.dataset.proj === 'o') === !!cam.isOrthographicCamera));
+}
+
+function render() {
+  dirty = false;
+  if (M) { updateSilhouettes(); updateDash(); }
+  renderer.render(scene, cam);
+  renderCube();
+  drawOverlay();
+}
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (anim) stepAnim(now);
+  else controls.update();
+  if (dirty) render();
+}
+
+// ====================================================================
+// 視角方塊（右上角）：跟著相機轉，點一個面就切到那個視角
+// ====================================================================
+const CB = {};
+function initCube() {
+  const cv = $('cube');
+  CB.r = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
+  CB.r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  CB.scene = new THREE.Scene();
+  CB.cam = new THREE.OrthographicCamera(-0.95, 0.95, 0.95, -0.95, 0.1, 10);
+  CB.mats = CUBE_FACES.map(([view, txt]) => {
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const g = c.getContext('2d');
+    g.fillStyle = '#fbfcfd'; g.fillRect(0, 0, 128, 128);
+    g.strokeStyle = '#c3cad5'; g.lineWidth = 6; g.strokeRect(3, 3, 122, 122);
+    g.fillStyle = view === 'front' ? '#e8590c' : '#3a4354';
+    g.font = 'bold 64px "PingFang TC","Microsoft JhengHei","Noto Sans TC",sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(txt, 64, 68);
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+    return new THREE.MeshBasicMaterial({ map: tex });
+  });
+  CB.mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), CB.mats);
+  CB.scene.add(CB.mesh);
+  CB.ray = new THREE.Raycaster();
+  CB.hover = -1;
+  const faceAt = e => {
+    const r = cv.getBoundingClientRect();
+    CB.ray.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), CB.cam);
+    const hit = CB.ray.intersectObject(CB.mesh)[0];
+    return hit ? hit.face.materialIndex : -1;
+  };
+  const setHover = i => {
+    if (i === CB.hover) return;
+    CB.hover = i;
+    CB.mats.forEach((m, k) => m.color.set(k === i ? 0xbcd4ff : 0xffffff));
+    cv.title = i >= 0 ? `切到${VIEWS[CUBE_FACES[i][0]].name}` : '點方塊的面切換視角';
+    renderCube();
+  };
+  cv.addEventListener('pointermove', e => setHover(faceAt(e)));
+  cv.addEventListener('pointerleave', () => setHover(-1));
+  cv.addEventListener('click', e => {
+    const i = faceAt(e);
+    if (i >= 0) { hideHint(); goView(CUBE_FACES[i][0]); }
+  });
+  new ResizeObserver(() => { CB.r.setSize(cv.clientWidth, cv.clientHeight, false); renderCube(); }).observe(cv);
+}
+function renderCube() {
+  if (!CB.r) return;
+  CB.cam.quaternion.copy(cam.quaternion);
+  CB.cam.position.set(0, 0, 3).applyQuaternion(cam.quaternion);
+  CB.r.render(CB.scene, CB.cam);
+}
+
+// ====================================================================
+// 量測：點兩個點，顯示距離與寬／高／深分量；點會吸附到端點、稜線
+// ====================================================================
+const MS = { list: [], pending: null };
+const ray = new THREE.Raycaster();
+const _v = new THREE.Vector3(), _pm = new THREE.Matrix4(), _a = new THREE.Vector3(), _b = new THREE.Vector3(), _q3 = new THREE.Vector3();
+
+function ndc(x, y) { return new THREE.Vector2(x / W * 2 - 1, -(y / H) * 2 + 1); }
+function depthOf(p) { return -_v.copy(p).applyMatrix4(cam.matrixWorldInverse).z; }
+function toScreen(p) { _v.copy(p).project(cam); return [(_v.x + 1) / 2 * W, (1 - _v.y) / 2 * H, _v.z]; }
+function firstHit(x, y) {
+  ray.setFromCamera(ndc(x, y), cam);
+  return ray.intersectObject(R.mesh, false)[0] || null;
+}
+// 這個點從相機看得到嗎（沒有被模型其他部分擋住）
+function visible(p) {
+  const s = toScreen(p), hit = firstHit(s[0], s[1]);
+  return !hit || depthOf(hit.point) >= depthOf(p) - M.diag * 2e-3;
+}
+
+function pickSnap(x, y) {
+  if (!M || !R.mesh) return null;
+  cam.updateMatrixWorld();
+  const hit = firstHit(x, y);
+  const hitD = hit ? depthOf(hit.point) : Infinity, tolD = M.diag * 0.02;
+  const pm = _pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse).elements;
+  const V = M.V;
+  const proj = (px, py, pz) => {
+    const w = pm[3] * px + pm[7] * py + pm[11] * pz + pm[15];
+    return [((pm[0] * px + pm[4] * py + pm[8] * pz + pm[12]) / w + 1) / 2 * W, (1 - (pm[1] * px + pm[5] * py + pm[9] * pz + pm[13]) / w) / 2 * H, w];
+  };
+  const accept = p => depthOf(p) <= hitD + tolD || visible(p);
+  // 1. 端點
+  const vc = [], RV = 13;
+  for (const v of M.corners) {
+    const s = proj(V[3 * v], V[3 * v + 1], V[3 * v + 2]);
+    if (s[2] <= 0) continue;
+    const d2 = (s[0] - x) ** 2 + (s[1] - y) ** 2;
+    if (d2 < RV * RV) vc.push([d2, v]);
+  }
+  vc.sort((p, q) => p[0] - q[0]);
+  for (const [, v] of vc.slice(0, 4)) {
+    const p = new THREE.Vector3(V[3 * v], V[3 * v + 1], V[3 * v + 2]);
+    if (accept(p)) return { p, kind: 'vertex' };
+  }
+  // 2. 稜線上
+  const S2 = M.sharpSeg, ec = [], RE = 9;
+  for (let i = 0; i < S2.length; i += 6) {
+    const A = proj(S2[i], S2[i + 1], S2[i + 2]), B = proj(S2[i + 3], S2[i + 4], S2[i + 5]);
+    if (A[2] <= 0 || B[2] <= 0) continue;
+    const dx = B[0] - A[0], dy = B[1] - A[1], L2 = dx * dx + dy * dy;
+    const t = L2 ? Math.min(1, Math.max(0, ((x - A[0]) * dx + (y - A[1]) * dy) / L2)) : 0;
+    const d2 = (A[0] + dx * t - x) ** 2 + (A[1] + dy * t - y) ** 2;
+    if (d2 < RE * RE) ec.push([d2, i]);
+  }
+  ec.sort((p, q) => p[0] - q[0]);
+  ray.setFromCamera(ndc(x, y), cam);
+  for (const [, i] of ec.slice(0, 4)) {
+    _a.set(S2[i], S2[i + 1], S2[i + 2]); _b.set(S2[i + 3], S2[i + 4], S2[i + 5]);
+    ray.ray.distanceSqToSegment(_a, _b, null, _q3);
+    const p = _q3.clone();
+    if (accept(p)) { ray.setFromCamera(ndc(x, y), cam); return { p, kind: 'edge' }; }
+    ray.setFromCamera(ndc(x, y), cam);
+  }
+  // 3. 面上
+  return hit ? { p: hit.point.clone(), kind: 'face' } : null;
+}
+
+const SNAP_NAMES = { vertex: '端點', edge: '邊上', face: '面上' };
+function showSnap(s) {
+  const el = $('snap');
+  if (!s) { el.hidden = true; return; }
+  const [sx, sy] = toScreen(s.p);
+  el.className = s.kind === 'vertex' ? '' : s.kind;
+  el.style.left = sx + 'px'; el.style.top = sy + 'px';
+  el.firstChild.textContent = SNAP_NAMES[s.kind];
+  el.hidden = false;
+}
+function placePoint(x, y) {
+  const s = pickSnap(x, y);
+  if (!s) return;
+  if (!MS.pending) MS.pending = s;
+  else { MS.list.push({ a: MS.pending, b: s }); MS.pending = null; }
+  $('bClear').hidden = false;
+  updateMHint();
+  dirty = true;
+}
+function clearMeasures() {
+  MS.list = []; MS.pending = null; $('bClear').hidden = true; updateMHint(); dirty = true;
+}
+function setMeasure(on) {
+  S.measure = on;
+  document.body.classList.toggle('measuring', on);
+  $('bMeasure').classList.toggle('on', on);
+  if (!on) { MS.pending = null; showSnap(null); }
+  updateMHint(); dirty = true;
+}
+function updateMHint() {
+  const el = $('mhint');
+  el.hidden = !S.measure;
+  el.textContent = MS.pending ? '點第二個點（Esc 取消）' : '點模型上的第一個點：會自動吸附到端點與邊';
+}
+function drawOverlay() {
+  let svg = '', html = '';
+  const dot = (s, fill) => `<circle cx="${s[0].toFixed(1)}" cy="${s[1].toFixed(1)}" r="4" fill="${fill}" stroke="#e8590c" stroke-width="2"/>`;
+  for (const m of MS.list) {
+    const A = toScreen(m.a.p), B = toScreen(m.b.p);
+    if (A[2] > 1 || B[2] > 1) continue;
+    svg += `<line x1="${A[0].toFixed(1)}" y1="${A[1].toFixed(1)}" x2="${B[0].toFixed(1)}" y2="${B[1].toFixed(1)}" stroke="#e8590c" stroke-width="2"/>`;
+    svg += dot(A, '#fff') + dot(B, '#fff');
+    const dx = Math.abs(m.b.p.x - m.a.p.x), dy = Math.abs(m.b.p.y - m.a.p.y), dz = Math.abs(m.b.p.z - m.a.p.z);
+    const parts = [['寬', dx], ['高', dy], ['深', dz]].filter(([, v]) => v >= 0.05);
+    const sub = parts.length > 1 ? `<small>${parts.map(([n, v]) => `${n} ${fmt(v)}`).join(' · ')}</small>` : '';
+    html += `<div class="ml" style="left:${((A[0] + B[0]) / 2).toFixed(1)}px;top:${((A[1] + B[1]) / 2).toFixed(1)}px"><b>${fmt(m.a.p.distanceTo(m.b.p))}</b> mm${sub}</div>`;
+  }
+  if (MS.pending) { const P = toScreen(MS.pending.p); if (P[2] <= 1) svg += dot(P, '#e8590c'); }
+  $('ov').innerHTML = svg;
+  $('labels').innerHTML = html;
+}
+
+// ====================================================================
+// 介面
+// ====================================================================
+function fail(msg) {
+  const el = $('loading');
+  el.hidden = false; el.classList.add('err'); el.textContent = msg;
+}
+function loading(msg) {
+  const el = $('loading');
+  el.classList.remove('err');
+  el.hidden = !msg; if (msg) el.textContent = msg;
+}
+function hideHint() { $('hint').classList.add('gone'); }
+function applyHidden() {
+  $('bHidden').classList.toggle('on', S.showHidden);
+  if (R.hidSharp) R.hidSharp.visible = S.showHidden;
+  if (R.hidSil) R.hidSil.visible = S.showHidden && R.visSil.visible;
+  dirty = true;
+}
+// 老師在連結上關掉的功能，連按鈕一起拿掉
+function applyFlags() {
+  $('gMeasure').hidden = !opts.measure;
+  if (!opts.measure && S.measure) setMeasure(false);
+  if (!opts.measure) clearMeasures();
+  $('gHidden').hidden = !opts.hidden;
+  if (!opts.hidden && S.showHidden) { S.showHidden = false; applyHidden(); }
+  $('dims').hidden = !opts.dims || !M;
+  $('title').textContent = opts.title || (src ? src.name.replace(/^.*\//, '').replace(/\.[^.]+$/, '') : '');
+}
+function updateDims() {
+  if (!M) return;
+  const [x, y, z] = M.size;
+  $('dims').textContent = `外形　寬 ${fmt(x)} × 深 ${fmt(z)} × 高 ${fmt(y)} mm`;
+}
+
+function initUI() {
+  const coarse = window.matchMedia('(pointer: coarse)').matches;
+  $('hint').textContent = coarse ? '單指拖曳旋轉 · 雙指縮放、平移' : '拖曳旋轉 · 滾輪縮放 · 右鍵或 Shift＋拖曳平移';
+  document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => { hideHint(); goView(b.dataset.view); }));
+  document.querySelectorAll('[data-proj]').forEach(b => b.addEventListener('click', () => setProj(b.dataset.proj)));
+  $('bHidden').addEventListener('click', () => { S.showHidden = !S.showHidden; applyHidden(); });
+  $('bMeasure').addEventListener('click', () => setMeasure(!S.measure));
+  $('bClear').addEventListener('click', clearMeasures);
+  $('bReset').addEventListener('click', () => { setProj(opts.proj); goView(opts.view); });
+  markProj();
+
+  // 被嵌入（Google 協作平台）時提供「新分頁開啟」；單獨開啟時提供全螢幕
+  let embedded;
+  try { embedded = window.top !== window.self; } catch { embedded = true; }
+  const pop = $('bPop');
+  if (embedded) {
+    pop.hidden = false; pop.textContent = '新分頁 ↗'; pop.title = '在新分頁開啟（畫面比較大）';
+    pop.addEventListener('click', () => window.open(studentURL(), '_blank', 'noopener'));
+  } else if (document.fullscreenEnabled && !TEACHER) {
+    pop.hidden = false; pop.textContent = '全螢幕'; pop.title = '全螢幕（Esc 離開）';
+    pop.addEventListener('click', () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen());
+  }
+
+  // 點選（沒有拖曳）才算放量測點；拖曳仍然是旋轉
+  const el = renderer.domElement;
+  let down = null, hoverReq = 0;
+  const local = e => { const r = el.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  el.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY, b: e.button, touch: e.pointerType === 'touch' }; hideHint(); showSnap(null); });
+  el.addEventListener('pointerup', e => {
+    if (down && S.measure && down.b === 0 && Math.hypot(e.clientX - down.x, e.clientY - down.y) < (down.touch ? 10 : 5)) {
+      const [x, y] = local(e); placePoint(x, y);
+    }
+    down = null;
+  });
+  el.addEventListener('pointermove', e => {
+    if (!S.measure || e.buttons || e.pointerType === 'touch') return;
+    const [x, y] = local(e);
+    cancelAnimationFrame(hoverReq);
+    hoverReq = requestAnimationFrame(() => showSnap(pickSnap(x, y)));
+  });
+  el.addEventListener('pointerleave', () => showSnap(null));
+  controls.addEventListener('change', () => { if (!$('snap').hidden) showSnap(null); });
+
+  window.addEventListener('keydown', e => {
+    if (e.target.closest && e.target.closest('input, select, textarea')) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'Escape' && S.measure) { if (MS.pending) { MS.pending = null; updateMHint(); dirty = true; } else setMeasure(false); return; }
+    if (VIEW_KEYS[e.key]) { hideHint(); goView(VIEW_KEYS[e.key]); }
+  });
+}
+
+// ====================================================================
+// 載入模型
+// ====================================================================
+function modelURL(name) {
+  const parts = name.split('/').filter(Boolean);
+  if (!parts.length || parts.some(s => s === '..' || s === '.' || /[:\\]/.test(s))) throw new Error('模型路徑不正確：' + name);
+  return 'models/' + parts.map(encodeURIComponent).join('/');
+}
+async function loadRemote(name) {
+  loading('下載模型中…');
+  const url = modelURL(name);
+  let res;
+  try { res = await fetch(url, { cache: 'no-cache' }); }
+  catch (err) {
+    throw new Error(location.protocol === 'file:'
+      ? '直接雙擊開啟時讀不到 models/ 裡的檔案。請用網址參數 ?teacher 開啟後以拖曳的方式預覽，或發布後用線上版。'
+      : '網路錯誤，讀不到模型：' + err.message);
+  }
+  if (!res.ok) throw new Error(`找不到模型「${name}」。確認檔案已放進 models/ 並發布（發布後約需 1～2 分鐘生效）。`);
+  await loadBuffer(name, await res.arrayBuffer(), false);
+}
+async function loadBuffer(name, buf, local) {
+  loading('處理模型中…');
+  await nextFrame();
+  const parsed = await parseModel(name, buf);
+  if (!parsed.soup.length) throw new Error('檔案裡找不到任何面（三角網格）。');
+  await nextFrame();
+  const topo = buildTopology(parsed.soup);
+  if (!topo.nt) throw new Error('檔案裡找不到有效的面。');
+  src = { name, topo, fmtZup: parsed.zUp, fmtUnit: parsed.unit, unitNote: parsed.unitNote, local };
+  clearMeasures();
+  applyModel(true);
+  loading(null);
+}
+function modelCfg() {
+  return { zUp: opts.up ?? src.fmtZup, rot: opts.rot, unit: opts.u ?? src.fmtUnit, thr: opts.a };
+}
+// 重新套用方向／單位（老師調整時呼叫）；resetView = 回到起始視角，否則維持目前方向
+function applyModel(resetView) {
+  const dir = M ? currentDir() : null;
+  M = makeModel(src.topo, modelCfg());
+  MS.list = []; MS.pending = null; $('bClear').hidden = true; updateMHint();
+  setupCamera();
+  buildScene();
+  updateDims();
+  applyFlags();
+  if (resetView || !dir) { setProj(opts.proj); goView(opts.view, false); }
+  else flyTo(dir, false);
+  dirty = true;
+  if (TEACHER) teacherAfterLoad();
+}
+
+// ====================================================================
+// 老師設定頁（?teacher，或沒有指定模型時）
+// ====================================================================
+const LIST = { files: null };
+function baseURL() { return location.href.split(/[?#]/)[0].replace(/index\.html$/, ''); }
+function studentURL() {
+  const p = new URLSearchParams();
+  p.set('m', opts.m);
+  if (src) {
+    if (opts.up !== null && opts.up !== src.fmtZup) p.set('up', opts.up ? 'z' : 'y');
+    if (opts.u !== null && opts.u !== src.fmtUnit) p.set('u', String(opts.u));
+  }
+  if (opts.rot) p.set('rot', opts.rot);
+  if (opts.a !== 30) p.set('a', String(opts.a));
+  if (opts.view !== 'iso') p.set('view', opts.view);
+  if (opts.proj !== 'o') p.set('proj', opts.proj);
+  if (!opts.measure) p.set('measure', '0');
+  if (!opts.dims) p.set('dims', '0');
+  if (!opts.hidden) p.set('hidden', '0');
+  if (opts.title) p.set('title', opts.title);
+  return baseURL() + '?' + p.toString();
+}
+
+function initTeacher() {
+  document.body.classList.add('teacher');
+  document.title = '3D 模型檢視器 · 老師設定';
+  $('panel').hidden = false;
+  $('loading').textContent = '從左邊選一個模型，或把檔案拖進來';
+
+  fetch('models/list.json', { cache: 'no-cache' })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error(r.status)))
+    .then(j => fillList((j.models || []).map(x => x.file)))
+    .catch(() => fillList(null));
+  $('tList').addEventListener('change', e => { if (e.target.value) pickModel(e.target.value); });
+
+  const drop = $('tDrop');
+  $('tFile').addEventListener('change', e => { const f = e.target.files[0]; if (f) pickLocal(f); e.target.value = ''; });
+  ['dragenter', 'dragover'].forEach(t => window.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(t => window.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  window.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) pickLocal(f); });
+
+  document.querySelectorAll('[data-rot]').forEach(b => b.addEventListener('click', () => {
+    if (!src) return;
+    opts.rot = canonRot(opts.rot + b.dataset.rot); applyModel(false); syncURL();
+  }));
+  $('tRotReset').addEventListener('click', () => { if (!src) return; opts.rot = ''; applyModel(false); syncURL(); });
+  $('tZup').addEventListener('change', e => { if (!src) return; opts.up = e.target.checked; applyModel(false); syncURL(); });
+  $('tUnit').addEventListener('change', e => { if (!src) return; opts.u = +e.target.value; applyModel(false); syncURL(); });
+  $('tAng').addEventListener('input', e => { $('tAngVal').textContent = e.target.value + '°'; });
+  $('tAng').addEventListener('change', e => { opts.a = +e.target.value; if (src) applyModel(false); syncURL(); });
+  $('tTitle').addEventListener('input', e => { opts.title = e.target.value.trim().slice(0, 80); applyFlags(); syncURL(); });
+  $('tView').addEventListener('change', e => { opts.view = e.target.value; goView(opts.view); syncURL(); });
+  $('tProj').addEventListener('change', e => { opts.proj = e.target.value; setProj(opts.proj); syncURL(); });
+  for (const [id, key] of [['tMeasure', 'measure'], ['tDims', 'dims'], ['tHidden', 'hidden']]) {
+    $(id).addEventListener('change', e => { opts[key] = e.target.checked; applyFlags(); syncURL(); });
+  }
+  $('tCopy').addEventListener('click', async () => {
+    const text = $('tUrl').value;
+    try { await navigator.clipboard.writeText(text); }
+    catch { $('tUrl').select(); document.execCommand('copy'); }
+    $('tCopy').textContent = '已複製 ✓';
+    setTimeout(() => { $('tCopy').textContent = '複製網址'; }, 1600);
+  });
+  syncForm();
+  syncURL();
+  if (opts.m) pickModel(opts.m, true);
+}
+
+function fillList(files) {
+  LIST.files = files;
+  const sel = $('tList');
+  if (!files) {
+    sel.innerHTML = '<option value="">（讀不到模型清單）</option>';
+    showTWarn(location.protocol === 'file:'
+      ? '直接雙擊開啟時讀不到 models/ 清單：可以先用拖曳的方式預覽；網址要在發布後，從線上版的設定頁複製。'
+      : '讀不到 models/list.json：請雙擊「發布模型.command」重新產生並上傳。');
+  } else if (!files.length) {
+    sel.innerHTML = '<option value="">（models/ 裡還沒有模型）</option>';
+  } else {
+    sel.innerHTML = '<option value="">— 選擇模型 —</option>' + files.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('');
+    if (opts.m && files.includes(opts.m)) sel.value = opts.m;
+  }
+  checkPublished();
+}
+function showTWarn(msg) { const el = $('tWarn'); el.hidden = !msg; el.textContent = msg || ''; }
+function checkPublished() {
+  if (!src || !LIST.files) return;
+  if (!LIST.files.includes(opts.m)) {
+    showTWarn(`「${opts.m}」還不在 models/ 的清單裡。把它放進 models/ 資料夾、雙擊「發布模型.command」之後，下面的網址才會生效。`);
+  } else showTWarn('');
+}
+
+// 換模型時，方向與單位回到該檔案的預設；顯示設定保留
+function resetPerModel() { opts.up = null; opts.rot = ''; opts.u = null; }
+async function pickModel(name, keepOpts = false) {
+  if (!keepOpts) resetPerModel();
+  opts.m = name;
+  syncURL();
+  try { await loadRemote(name); }
+  catch (err) { console.error(err); fail(err.message || String(err)); }
+}
+async function pickLocal(file) {
+  resetPerModel();
+  opts.m = file.name;
+  if (LIST.files && LIST.files.includes(file.name)) $('tList').value = file.name; else $('tList').value = '';
+  syncURL();
+  try { await loadBuffer(file.name, await file.arrayBuffer(), true); }
+  catch (err) { console.error(err); fail('讀取失敗：' + (err.message || err)); }
+}
+
+function teacherAfterLoad() {
+  const cfg = modelCfg();
+  opts.up = cfg.zUp; opts.u = cfg.unit;
+  syncForm();
+  const [x, y, z] = M.size;
+  const unitName = $('tUnit').selectedOptions[0]?.textContent || 'mm';
+  const notes = [`檔案單位 ${unitName}（${opts.u === src.fmtUnit ? src.unitNote : '手動設定'}）`];
+  if (M.tjFixed) notes.push(`自動接合 ${M.tjFixed} 處接縫不對齊的點`);
+  if (M.dupRemoved) notes.push(`移除 ${M.dupRemoved} 個重複的面`);
+  $('tInfo').innerHTML = `<b>${esc(src.name)}</b>　${M.nt.toLocaleString()} 個三角面<br>寬 ${fmt(x)} × 深 ${fmt(z)} × 高 ${fmt(y)} mm<br>${notes.join('；')}`;
+  checkPublished();
+  if (M.stats.open) {
+    const w = $('tWarn');
+    w.hidden = false;
+    w.textContent = (w.textContent ? w.textContent + ' ' : '') + `另外有 ${M.stats.open} 條邊只連到一個面，模型可能有破洞或沒接好的面，畫面上可能多出線條。`;
+  }
+  syncURL();
+}
+
+function syncForm() {
+  if (src) {
+    $('tZup').checked = opts.up ?? src.fmtZup;
+    const u = String(opts.u ?? src.fmtUnit), sel = $('tUnit');
+    if (![...sel.options].some(o => o.value === u)) sel.add(new Option(`${u} mm`, u));
+    sel.value = u;
+  }
+  $('tAng').value = opts.a; $('tAngVal').textContent = opts.a + '°';
+  $('tTitle').value = opts.title;
+  $('tView').value = opts.view;
+  $('tProj').value = opts.proj;
+  $('tMeasure').checked = opts.measure;
+  $('tDims').checked = opts.dims;
+  $('tHidden').checked = opts.hidden;
+}
+
+function syncURL() {
+  const has = !!opts.m;
+  const url = has ? studentURL() : '';
+  $('tUrl').value = url || '（先選一個模型）';
+  $('tCopy').disabled = !has;
+  $('tOpen').hidden = !has;
+  if (has) $('tOpen').href = url;
+  const local = location.protocol === 'file:' || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  const w = $('tUrlWarn');
+  w.hidden = !(has && local);
+  w.textContent = '這是本機網址，同學打不開。發布後請在線上版（github.io）的設定頁重新複製。';
+  // 設定頁自己的網址也同步，重新整理或加書籤時保留設定
+  if (has && location.protocol !== 'file:') history.replaceState(null, '', studentURL().replace('?', '?teacher&'));
+}
+
+// ====================================================================
+// 啟動
+// ====================================================================
+initCube();
+initUI();
+applyFlags();
+requestAnimationFrame(loop);
+if (TEACHER) initTeacher();
+else loadRemote(opts.m).catch(err => { console.error(err); fail(err.message || String(err)); });
+</script>
+</body>
+</html>
