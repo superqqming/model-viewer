@@ -1,11 +1,6 @@
 {
  "models": [
   {
-   "file": "10_6 工件組合模擬器測試題目.obj",
-   "bytes": 86952,
-   "modified": "2026-10-06 23:15"
-  },
-  {
    "file": "cube test1.glb",
    "bytes": 25304,
    "modified": "2026-10-05 20:38"
@@ -19,6 +14,11 @@
    "file": "cube test2.obj",
    "bytes": 50498,
    "modified": "2026-10-06 12:31"
+  },
+  {
+   "file": "sample-1006-test.obj",
+   "bytes": 86952,
+   "modified": "2026-10-06 23:15"
   },
   {
    "file": "sample-l-block.obj",
